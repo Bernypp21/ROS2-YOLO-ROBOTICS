@@ -1,0 +1,84 @@
+# autonomous-search-robot
+
+
+# how to build Docker
+1. Ensure you have docker installed for you system
+```
+docker --version
+```
+2.Build the docker imag
+```
+#docker build -t ros2-jazzy-yolo
+```
+
+3.Run the run_docker.sh that will launch docker for you
+## options that can occur
+1. if container is running, the it will open new terminal in that container.
+2. if container exists, but stopped.It will start it and then enter it.
+3. else build a new container
+
+### cmd to run
+```
+chmod +x run_docker.sh
+./run_docker.sh
+```
+
+
+# System structure and Start up.
+
+## The system is split between host and container
+    [ DOCKER CONTAINER ]: contains the ROS2 and YOLO file.
+        Teleop Node / python scripts <----> uses to allow yolo detection and robot movement
+                |||
+        script and node outputs  <-->  Values from node outpus
+                \/
+            roz_gz_bridge <-----> converts ROS2 -> Gazebo mesages
+    
+    [HOST MACHINE]: Only runs the gazebo simulator
+            Gazebo sim (harmonic)
+                - Receives GZ messages
+                - control robot
+
+    [NETWORK BRIDGE] : comunication done between network bridge that was setup in docker
+        -net=host -icp=host <--> flags that gave the container same network as host allowing for network communication. Can also be configured if needed
+
+## Preparing Host Terminal 
+1. Ensure you have this path setup in .bashrc file or by using this command in terminal
+```
+export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:(your path to files)ros2_ws/src
+```
+2. Launch Gazebo sim. Passing in the world file
+```
+gz sim -r (your path to file)ros2_ws/src/my_robot_description/worlds/jetty.sdf
+```
+
+# Preparing  Docker
+1. Ensure you are in docker container and go to ros2_ws directory.
+```
+cd ros2_ws
+```
+2. If you have built before make sure to delete old version before proceeding. (You can also use this command if building error occur)
+```
+rm -rf build/ install/ log/
+```
+3. build the file for ROS2 with this command. Make sure you are in ros_ws 
+```
+colcon build
+```
+4. source the setup.sh file, make sure above command work. ls in ros_ws, their should be new directories and one called install
+```
+source install/setup.sh
+```
+5. Launch the file. Launch_sim.py was create to allow for easy launchs 
+```
+ros2 launch my_robot_description launch_sim.py
+```
+6. Check connection inside docker
+```
+ros2 topic list
+```
+
+7. cmmd ros2 run ros_gz_bridge parameter_bridge /cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twi
+
+open new terminal int container
+
