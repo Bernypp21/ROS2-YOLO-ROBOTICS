@@ -71,14 +71,20 @@ source install/setup.sh
 ```
 5. Launch the file. Launch_sim.py was create to allow for easy launchs 
 ```
-ros2 launch my_robot_description launch_sim.py
+ros2 launch my_robot_description launch_sim.py user_input:="variable name to send over"
+
 ```
 6. Check connection inside docker
 ```
 ros2 topic list
 ```
 
-7. cmmd ros2 run ros_gz_bridge parameter_bridge /cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twi
+7. command to control with keyboard
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+8. command to open in rviz
+export LIBGL_ALWAYS_SOFTWARE=1
+rviz2 --ros-args -p use_sim_time:=true
 
 open new terminal int container
 

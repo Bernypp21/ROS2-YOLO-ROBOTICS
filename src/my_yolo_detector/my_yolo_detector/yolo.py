@@ -1,4 +1,3 @@
-#file that contains the yolo algorithm model
 from ultralytics import YOLO
 import rclpy 
 from rclpy.node import Node
@@ -10,6 +9,8 @@ from cv_bridge import CvBridge
 #getting the raw value data type from vision msg
 from vision_msgs.msg import *
 
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Int32
 '''
 This class represents the yolo node that will be used for ros2.
 Purpose: Initailize the node, and connect the connection between this node and camera.
@@ -21,16 +22,35 @@ class YoloNode(Node):
     #initialize the node
     def __init__(self):
         super().__init__("YOLO_NODE")
+        #variables
+        #yolo model name
+        self.model_name = 'yolo12s.pt'
 
-        #parameter for the yolo, and path to subscribe to which is camera path you get from using cmd ros2 topic list in terminal
-        self.model_name = 'yolo11n.pt'
-
+        #topic name that can be seen in topic list
+        #in
         self.topic_in = '/robot/camera/image'
-        #publisher paths
+        #out
         self.topic_out = '/detections/image_annotated'
         self.topic_out_detection = '/detections/raw'
+        self.topic_out_found = "/detections/found"
+        #to control robot movement
+        self.topic_cmd_vel = "/cmd_vel"
 
-        #loading in the model. This will also give a message to the user that model is being loaded
+        #Declaring defult varaible name for pass in parameters
+        self.declare_parameter('target_param','default')
+
+        #gettin in target object from user
+        self.target_object = str(self.get_parameter('target_param').value).lower().strip()
+        #state flag for loops
+        self.found_flag = False
+
+        #outputs input on command line
+        if self.target_object is not None:
+            self.get_logger().info(f'Recieved user  input {self.target_object}')
+        else:
+            self.get_logger().info(f'Did not recieved any arguements')
+
+        #loading in the model and model weight
         self.get_logger().info(f"Yolo model is being loaded: {self.model_name}.")
         try:
             self.model = YOLO(self.model_name)
@@ -60,6 +80,9 @@ class YoloNode(Node):
 
         #creating the detection publish which is a list of 2d arrays
         self.detection_pub = self.create_publisher(Detection2DArray,self.topic_out_detection,10)
+        
+        #publish that the robot will throught if image is found
+        self.detection_signal = self.create_publisher(Twist,self.topic_cmd_vel,10)
 
 
     def image_callback(self,msg):
@@ -78,7 +101,7 @@ class YoloNode(Node):
             self.get_logger().error(f"failed to convert image {e}")
             return
 
-        #preform yolo detection
+        #preform yolo detection 
         results = self.model(cv_image, verbose=False)
         result = results[0] #get the first result
 
@@ -100,6 +123,9 @@ class YoloNode(Node):
         #Creating a new message, the header is the original header from the camera. Essentially the frame from camera
         detections_array.header = msg.header
 
+        #state flag
+        current_frame = False
+
         #logic that will iterater through each object detected throught the current trip
         if result.boxes is not None:
             boxes = result.boxes.xyxy.cpu().numpy() #(N,4)
@@ -107,6 +133,16 @@ class YoloNode(Node):
             classes = result.boxes.cls.cpu().numpy() #(N,)
 
             for i in range(len(boxes)):
+                cls_idx = int(classes[i])
+                detected_name = self.class_names[cls_idx].lower().strip()
+                score = float(confs[i])
+
+                #checks if string matches terminal arguement and satisfies a relieable confidence rating of 55% minimum
+                if detected_name == self.target_object and score >= 0.55:
+                    current_frame = True
+                if detected_name != self.target_object:
+                    continue
+
                 xmin,ymin,xmax,ymax = boxes[i]
 
                 #create Detection2D
@@ -117,36 +153,52 @@ class YoloNode(Node):
                 bbox = BoundingBox2D()
 
                 #using Point2d for center
-                center_point = Point2D()
-                center_point.x = (xmin + xmax) / 2.0 #getting the width
-                center_point.y = (ymin + ymax) / 2.0 #getting the height
-
-                bbox.center.position = center_point
+                
+                bbox.center.position.x = float((xmin + xmax) / 2.0) #getting the width
+                bbox.center.position.y = float((ymin + ymax) / 2.0) #getting the height
                 bbox.size_x = float(xmax - xmin)
                 bbox.size_y = float(ymax - ymin)
 
                 detection.bbox = bbox                
 
-                #getting the object class and score
+               # getting the object class and score
                 obj_hyp = ObjectHypothesisWithPose()
-                obj_hyp.hypothesis.class_id = str(self.class_names[int(classes[i])])
-                class_n = self.class_names[(classes[i])]
-                obj_hyp.hypothesis.score = float(confs[i])
-                score = float(confs[i])
+                
+                # Double guard classification index mapping
+                cls_idx = int(classes[i])
+                if cls_idx in self.class_names:
+                    obj_hyp.hypothesis.class_id = str(self.class_names[cls_idx])
+                else:
+                    obj_hyp.hypothesis.class_id = f"unknown_{cls_idx}"
+                    
+                obj_hyp.hypothesis.score = score
                 detection.results.append(obj_hyp)
-
-                #logic that will check for object found that user wants. Not yet implement
-                '''
-                if(class_name == to_find and score >= 0.85)
-                    object is found return
-                        probably send a signal flag that alex can then connect to.. maybe publish something
-                        return and terminate the project
-                '''
                 #else add to array of object found
                 detections_array.detections.append(detection)
 
         #publishing the complete array
         self.detection_pub.publish(detections_array)
+        #checking to see if object found
+        if current_frame and not self.found_flag:
+            self.found_flag = True
+            self.execute_shutdown()
+    
+    
+    def execute_shutdown(self):
+        '''
+        Function that will halt robots movement and breaks out main thread execution
+        '''
+
+        #stop robot
+        stop_msg = Twist()
+        stop_msg.linear.x = 0.0
+        stop_msg.angular.z = 0.0
+
+        for _ in range(5):
+            self.detection_signal.publish(stop_msg)
+        self.get_logger().info("stopping the robot")
+
+        raise SystemExit
 
 
 def main(args=None):
@@ -160,6 +212,8 @@ def main(args=None):
 
         #node will run,until killed
         rclpy.spin(node)
+    except SystemExit:
+        node.get_logger().info("Shutting down")
     except KeyboardInterrupt:
         node.get_logger().info("Keyboard interrupt, shutting down")
     finally:
